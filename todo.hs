@@ -2,13 +2,13 @@ module Main where
 
 import System.Environment (getArgs, getProgName, lookupEnv)
 import Control.Exception (bracketOnError)
-import System.IO (openTempFile, Handle, hClose, hPutStr)
+import System.IO (openTempFile, Handle, hClose, hPutStr, hFlush, stdout)
 import System.Directory (removeFile, renameFile, doesFileExist)
 import Data.List (delete)
 import Control.Monad (liftM, unless)
 import System.FilePath ((</>))
 import Safe (readMay)
-
+import System.Exit (exitSuccess)
 
 ------------ Config ------------
 
@@ -21,11 +21,10 @@ customListDirectory = Nothing
 
 -- TODO: Almost everything is in the IO monad. See if a judicious refactor can change that.
 
--- TODO: check for list existence. Query to create if not present.
 main :: IO ()
 main = do
   args <- getArgs
-  defaultList >>= doesFileExist >>= flip unless promptToCreate
+  defaultList >>= doesFileExist >>= flip unless (promptToCreate >> exitSuccess)
   case args of
     []             -> listTodos
     ["new"]        -> addTodo
@@ -46,7 +45,10 @@ usageText = do
                    ]
 
 promptToCreate :: IO ()
-promptToCreate = error "Uh oh, can't find the default list!"
+promptToCreate = do
+  path <- defaultList
+  response <- query $ "No list found at " ++ path ++ ". Create one? [Yn] "
+  unless (response == "n") $ writeFile path ""
 
 listTodos :: IO ()
 listTodos = putStr . unlines . number . map (drop 2) . filter isActive . lines =<< readFile =<< defaultList
@@ -100,3 +102,9 @@ withTempFile str fn = do
   bracketOnError (openTempFile path str)
                  (\(n,h) -> hClose h >> removeFile n)
                  (\(n,h) -> fn h >> hClose h >> return n)
+
+query :: String -> IO String
+query q = do
+  putStr q
+  hFlush stdout
+  getLine
