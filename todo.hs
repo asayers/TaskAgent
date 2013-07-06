@@ -22,7 +22,11 @@ customListDirectory = Nothing
 type List = [Item]
 data Item = Complete   { body :: String }
           | Incomplete { body :: String }
-          deriving (Eq, Show)
+          deriving (Eq)
+
+instance Show Item where
+  show (Complete str) = "x " ++ str
+  show (Incomplete str) = "- " ++ str
 
 -------- Read and Show ---------
 
@@ -34,8 +38,11 @@ parseItem _            = Nothing
 parseList :: String -> Maybe List
 parseList = mapM parseItem . lines
 
-ppList :: List -> String
-ppList = unlines . zipWith (\n i -> show n ++ " " ++ body i) ([1..]::[Int]) . filter isIncomplete
+showListScreen :: List -> String
+showListScreen = unlines . zipWith (\n i -> show n ++ " " ++ body i) ([1..]::[Int]) . filter isIncomplete
+
+showListDisk :: List -> String
+showListDisk = unlines . map show
 
 ------------ Logic ------------
 
@@ -84,30 +91,34 @@ promptToCreate = do
   response <- query $ "No list found at " ++ path ++ ". Create one? [Yn] "
   unless (response == "n") $ writeFile path ""
 
-listTodos :: IO ()
-listTodos = do 
+loadDefaultList :: IO List
+loadDefaultList = do
   file <- readFile =<< defaultList
   case parseList file of
-    Nothing   -> error "Parse error"
-    Just list -> putStr $ ppList list
+    Nothing   -> error "Couldn't parse list"
+    Just list -> return list
+
+listTodos :: IO ()
+listTodos = liftM showListScreen loadDefaultList >>= putStr
+
+-- TODO: Perhaps switch to strict IO so dropbox doesn't start synching temporary files
+-- TODO: Print item which was checked off
+completeTodo :: Int -> IO ()
+completeTodo n = do
+  list <- loadDefaultList
+  case checkOffItem list (n-1) of
+    Nothing    -> error "Item not found"
+    Just list' -> do
+      tempName <- withTempFile "todo-" $ \handle ->
+        hPutStr handle $ showListDisk list'
+      removeFile =<< defaultList
+      renameFile tempName =<< defaultList
 
 addTodo :: IO ()
 addTodo = do
   todo <- getLine
   path <- defaultList
   appendFile path $ "- " ++ todo ++ "\n"
-
-completeTodo :: Int -> IO ()
-completeTodo n = do
-  file <- liftM lines $ readFile =<< defaultList
-  let target = filter isActive file !! (n-1)
-      file' = unlines $ delete target file ++ ['x' : tail target]
-  tempName <- withTempFile "todo-" $ \handle ->
-    hPutStr handle file'
-  removeFile =<< defaultList
-  renameFile tempName =<< defaultList
-  putStrLn $ 'x' : tail target
-  
 
 ------- Path resolution --------
 
@@ -136,7 +147,6 @@ isActive x = head x == '-'
 -- | Creates a file in the working directory, named by suffixing str with a
 -- random number. Its handle is passed to fn. If there is an exception, the
 -- file is closed and deleted. Returns the name of the created file.
--- TODO: Perhaps switch to strict IO so dropbox doesn't start synching temporary files
 withTempFile :: String -> (Handle -> IO ()) -> IO FilePath
 withTempFile str fn = do
   path <- listDirectory
