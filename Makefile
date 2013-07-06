@@ -1,5 +1,5 @@
 todo: todo.hs
-	ghc -O2 -dynamic todo.hs
+	ghc -O2 todo.hs
 	strip -s todo
 
 install: todo
