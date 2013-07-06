@@ -28,28 +28,38 @@ instance Show Item where
   show (Complete str) = "x " ++ str
   show (Incomplete str) = "- " ++ str
 
--------- Read and Show ---------
+------------ Logic ------------
+
+usageText :: String -> String
+usageText name = unlines [ "Usage: " ++ name ++ " [new] [NUM]"
+                         , ""
+                         , name ++ "     - list items"
+                         , name ++ " new - create new item"
+                         , name ++ " NUM - check-off item NUM"
+                         , name ++ " -v  - show version info"
+                         ]
+
+versionText :: String
+versionText = unlines [ "Todo 0.1 - a TaskAgent-compatible todo list manager"
+                      , "(c) 2013 Alex Sayers; licence: BSD 3-Clause." ]
 
 parseItem :: String -> Maybe Item
 parseItem ('-':' ':xs) = Just (Incomplete xs)
 parseItem ('x':' ':xs) = Just (Complete xs)
 parseItem _            = Nothing
 
+-- TODO: Ignore empty lines
 parseList :: String -> Maybe List
 parseList = mapM parseItem . lines
 
-showListScreen :: List -> String
-showListScreen = unlines . zipWith (\n i -> show n ++ " " ++ body i) ([1..]::[Int]) . filter isIncomplete
+numberList :: List -> String
+numberList = unlines . zipWith (\n i -> show n ++ " " ++ body i) ([1..]::[Int]) . filter isIncomplete
 
-showListDisk :: List -> String
-showListDisk = unlines . map show
-
------------- Logic ------------
+serialiseList :: List -> String
+serialiseList = unlines . map show
 
 checkOffItem :: List -> Int -> Maybe List
-checkOffItem list n = case atMay (filter isIncomplete list) n of
-                        Nothing -> Nothing
-                        Just i  -> Just $ Complete (body i) : delete i list
+checkOffItem list n = liftM (\i -> Complete (body i) : delete i list) (atMay (filter isIncomplete list) n)
 
 isIncomplete :: Item -> Bool
 isIncomplete (Incomplete _) = True
@@ -62,29 +72,14 @@ main = do
   args <- getArgs
   defaultList >>= doesFileExist >>= flip unless (promptToCreate >> exitSuccess)
   case args of
-    []             -> listTodos
+    []             -> putStr . numberList =<< loadDefaultList
     ["new"]        -> addTodo
-    ["-v"]         -> versionText
+    ["-v"]         -> putStr versionText
     [n]            -> case readMay n :: Maybe Int of
                         Just n' -> completeTodo n'
-                        Nothing -> usageText
-    _              -> usageText
+                        Nothing -> putStr . usageText =<< getProgName
+    _              -> putStr . usageText =<< getProgName
     
-usageText :: IO ()
-usageText = do
-  prog <- getProgName
-  putStr $ unlines [ "Usage: " ++ prog ++ " [new] [NUM]"
-                   , ""
-                   , prog ++ "     - list items"
-                   , prog ++ " new - create new item"
-                   , prog ++ " NUM - check-off item NUM"
-                   , prog ++ " -v  - show version info"
-                   ]
-
-versionText :: IO ()
-versionText = putStr $ unlines [ "Todo 0.1 - a TaskAgent-compatible todo list manager"
-                               , "(c) 2013 Alex Sayers; licence: BSD 3-Clause." ]
-
 promptToCreate :: IO ()
 promptToCreate = do
   path <- defaultList
@@ -98,8 +93,11 @@ loadDefaultList = do
     Nothing   -> error "Couldn't parse list"
     Just list -> return list
 
-listTodos :: IO ()
-listTodos = liftM showListScreen loadDefaultList >>= putStr
+addTodo :: IO ()
+addTodo = do
+  todo <- getLine
+  path <- defaultList
+  appendFile path $ show (Incomplete todo) ++ "\n"
 
 -- TODO: Perhaps switch to strict IO so dropbox doesn't start synching temporary files
 -- TODO: Print item which was checked off
@@ -110,17 +108,16 @@ completeTodo n = do
     Nothing    -> error "Item not found"
     Just list' -> do
       tempName <- withTempFile "todo-" $ \handle ->
-        hPutStr handle $ showListDisk list'
+        hPutStr handle $ serialiseList list'
       removeFile =<< defaultList
       renameFile tempName =<< defaultList
 
-addTodo :: IO ()
-addTodo = do
-  todo <- getLine
-  path <- defaultList
-  appendFile path $ "- " ++ todo ++ "\n"
-
 ------- Path resolution --------
+
+defaultList :: IO FilePath
+defaultList = do
+  path <- listDirectory
+  return $ path </> "todo.txt"
 
 listDirectory :: IO FilePath
 listDirectory = case customListDirectory of
@@ -133,14 +130,6 @@ defaultListDirectory = do
   case home of
     Just path -> return $ path </> "Dropbox" </> "Apps" </> "TaskAgent"
     Nothing   -> error "Please set list directory manually"
-
-defaultList :: IO FilePath
-defaultList = do
-  path <- listDirectory
-  return $ path </> "todo.txt"
-
-isActive :: String -> Bool
-isActive x = head x == '-'
 
 ----------- Helpers ------------
 
