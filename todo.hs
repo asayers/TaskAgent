@@ -1,14 +1,16 @@
 module Main where
 
-import System.Environment (getArgs, getProgName, lookupEnv)
+import System.Environment (getArgs, getProgName)
 import Control.Exception (bracketOnError)
 import System.IO (openTempFile, Handle, hClose, hPutStr, hFlush, stdout)
-import System.Directory (removeFile, renameFile, doesFileExist)
+import System.Directory (removeFile, renameFile, doesFileExist, createDirectoryIfMissing, getHomeDirectory)
 import Data.List (delete)
 import Control.Monad (liftM, unless)
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 import Safe (readMay, atMay)
 import System.Exit (exitSuccess)
+
+-- TODO: There's a whole lot of file IO with no exception handling in sight!
 
 ------------ Config ------------
 
@@ -29,19 +31,6 @@ instance Show Item where
   show (Incomplete str) = "- " ++ str
 
 ------------ Logic ------------
-
-usageText :: String -> String
-usageText name = unlines [ "Usage: " ++ name ++ " [new] [NUM]"
-                         , ""
-                         , name ++ "     - list items"
-                         , name ++ " new - create new item"
-                         , name ++ " NUM - check-off item NUM"
-                         , name ++ " -v  - show version info"
-                         ]
-
-versionText :: String
-versionText = unlines [ "Todo 0.1 - a TaskAgent-compatible todo list manager"
-                      , "(c) 2013 Alex Sayers; licence: BSD 3-Clause." ]
 
 parseItem :: String -> Maybe Item
 parseItem ('-':' ':xs) = Just (Incomplete xs)
@@ -65,6 +54,21 @@ isIncomplete :: Item -> Bool
 isIncomplete (Incomplete _) = True
 isIncomplete (Complete   _) = False
 
+usageText :: IO String
+usageText = do
+  name <- getProgName
+  return $ unlines [ "Usage: " ++ name ++ " [new] [NUM]"
+                   , ""
+                   , name ++ "     - list items"
+                   , name ++ " new - create new item"
+                   , name ++ " NUM - check-off item NUM"
+                   , name ++ " -v  - show version info"
+                   ]
+
+versionText :: String
+versionText = unlines [ "Todo 0.1 - a TaskAgent-compatible todo list manager"
+                      , "(c) 2013 Alex Sayers; licence: BSD 3-Clause." ]
+
 ------------- IO --------------
 
 main :: IO ()
@@ -72,45 +76,47 @@ main = do
   args <- getArgs
   defaultList >>= doesFileExist >>= flip unless (promptToCreate >> exitSuccess)
   case args of
-    []             -> putStr . numberList =<< loadDefaultList
-    ["new"]        -> addTodo
+    []             -> putStr . numberList =<< loadList =<< defaultList
+    ["new"]        -> do
+      item <- getLine
+      path <- defaultList
+      addTodo path item
     ["-v"]         -> putStr versionText
     [n]            -> case readMay n :: Maybe Int of
-                        Just n' -> completeTodo n'
-                        Nothing -> putStr . usageText =<< getProgName
-    _              -> putStr . usageText =<< getProgName
+                        Just n' -> completeTodo n' =<< defaultList
+                        Nothing -> putStr =<< usageText
+    _              -> putStr =<< usageText
     
 promptToCreate :: IO ()
 promptToCreate = do
   path <- defaultList
   response <- query $ "No list found at " ++ path ++ ". Create one? [Yn] "
-  unless (response == "n") $ writeFile path ""
+  unless (response == "n") $ do
+    createDirectoryIfMissing True $ takeDirectory path
+    writeFile path ""
 
-loadDefaultList :: IO List
-loadDefaultList = do
-  file <- readFile =<< defaultList
+loadList :: FilePath -> IO List
+loadList path = do
+  file <- readFile path
   case parseList file of
     Nothing   -> error "Couldn't parse list"
     Just list -> return list
 
-addTodo :: IO ()
-addTodo = do
-  todo <- getLine
-  path <- defaultList
-  appendFile path $ show (Incomplete todo) ++ "\n"
+addTodo :: FilePath -> String -> IO ()
+addTodo path item = appendFile path $ show (Incomplete item) ++ "\n"
 
 -- TODO: Perhaps switch to strict IO so dropbox doesn't start synching temporary files
 -- TODO: Print item which was checked off
-completeTodo :: Int -> IO ()
-completeTodo n = do
-  list <- loadDefaultList
+completeTodo :: Int -> FilePath -> IO ()
+completeTodo n path = do
+  list <- loadList path
   case checkOffItem list (n-1) of
     Nothing    -> error "Item not found"
     Just list' -> do
       tempName <- withTempFile "todo-" $ \handle ->
         hPutStr handle $ serialiseList list'
-      removeFile =<< defaultList
-      renameFile tempName =<< defaultList
+      removeFile path
+      renameFile tempName path
 
 ------- Path resolution --------
 
@@ -121,25 +127,24 @@ defaultList = do
 
 listDirectory :: IO FilePath
 listDirectory = case customListDirectory of
-                         Just path -> return path
                          Nothing   -> defaultListDirectory
+                         Just path -> return path
 
 defaultListDirectory :: IO FilePath
 defaultListDirectory = do
-  home <- lookupEnv "HOME"
-  case home of
-    Just path -> return $ path </> "Dropbox" </> "Apps" </> "TaskAgent"
-    Nothing   -> error "Please set list directory manually"
+  home <- getHomeDirectory
+  return $ home </> "Dropbox" </> "Apps" </> "TaskAgent"
 
 ----------- Helpers ------------
 
 -- | Creates a file in the working directory, named by suffixing str with a
 -- random number. Its handle is passed to fn. If there is an exception, the
 -- file is closed and deleted. Returns the name of the created file.
+
 withTempFile :: String -> (Handle -> IO ()) -> IO FilePath
 withTempFile str fn = do
-  path <- listDirectory
-  bracketOnError (openTempFile path str)
+  dir <- listDirectory
+  bracketOnError (openTempFile dir str)
                  (\(n,h) -> hClose h >> removeFile n)
                  (\(n,h) -> fn h >> hClose h >> return n)
 
