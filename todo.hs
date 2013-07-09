@@ -5,10 +5,11 @@ import Control.Exception (bracketOnError)
 import System.IO (openTempFile, Handle, hClose, hPutStr, hFlush, stdout)
 import System.Directory (removeFile, renameFile, doesFileExist, createDirectoryIfMissing, getHomeDirectory)
 import Data.List (delete)
-import Control.Monad (liftM, unless)
+import Control.Monad (liftM, join, unless)
 import System.FilePath ((</>), takeDirectory)
 import Safe (readMay, atMay)
 import System.Exit (exitSuccess)
+import Control.Applicative ((<$>), (<*>))
 
 -- TODO: There's a whole lot of file IO with no exception handling in sight!
 
@@ -76,16 +77,13 @@ main = do
   args <- getArgs
   defaultList >>= doesFileExist >>= flip unless (promptToCreate >> exitSuccess)
   case args of
-    []             -> putStr . numberList =<< loadList =<< defaultList
-    ["new"]        -> do
-      item <- getLine
-      path <- defaultList
-      addTodo path item
-    ["-v"]         -> putStr versionText
-    [n]            -> case readMay n :: Maybe Int of
-                        Just n' -> completeTodo n' =<< defaultList
-                        Nothing -> putStr =<< usageText
-    _              -> putStr =<< usageText
+    []      -> putStr . numberList =<< loadList =<< defaultList
+    ["new"] -> join $ addTodo <$> defaultList <*> getLine
+    ["-v"]  -> putStr versionText
+    [n]     -> case readMay n :: Maybe Int of
+                 Just n' -> completeTodo n' =<< defaultList
+                 Nothing -> putStr =<< usageText
+    _       -> putStr =<< usageText
     
 promptToCreate :: IO ()
 promptToCreate = do
